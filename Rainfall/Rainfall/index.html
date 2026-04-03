@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARIX SIGNATURE | CHRISTMAS ETHER</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        body { 
+            margin: 0; overflow: hidden; background-color: #010101; 
+            font-family: 'Share Tech Mono', monospace; color: #d0d0d0; user-select: none;
+        }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;
+            pointer-events: none; padding: 40px; box-sizing: border-box;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .hud-text { text-transform: uppercase; letter-spacing: 2px; font-size: 11px; opacity: 0.6; }
+        .hud-title { font-size: 24px; font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.2); display: inline-block; padding-bottom: 5px; margin-bottom: 10px; color: #fff; }
+        .hud-status { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+        .indicator { width: 6px; height: 6px; background: #333; transform: rotate(45deg); transition: all 0.3s; }
+        .indicator.active { background: #00ffea; box-shadow: 0 0 8px #00ffea; }
+        .indicator.red { background: #ff3c00; box-shadow: 0 0 8px #ff3c00; }
+        #controls { pointer-events: auto; display: flex; gap: 15px; margin-bottom: 20px; }
+        .btn {
+            background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1); color: #777;
+            padding: 8px 24px; cursor: pointer; text-transform: uppercase;
+            font-family: 'Share Tech Mono', monospace; font-size: 12px; transition: all 0.4s;
+        }
+        .btn:hover { border-color: #aaa; color: #aaa; }
+        .btn.active { background: #eee; color: #000; border-color: #fff; box-shadow: 0 0 15px rgba(255,255,255,0.15); }
+        #loader {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 100;
+            display: flex; justify-content: center; align-items: center; flex-direction: column;
+        }
+        .bar { width: 150px; height: 1px; background: #222; margin-top: 15px; position: relative; overflow: hidden; }
+        .bar::after { content: ''; position: absolute; top: 0; left: 0; height: 100%; width: 30%; background: #fff; animation: load 1.5s infinite ease-in-out; }
+        @keyframes load { 0% { left: -30%; } 100% { left: 100%; } }
+        .input_video { display: none; }
+        .data-lines { position: absolute; right: 40px; top: 50%; transform: translateY(-50%); text-align: right; border-right: 1px solid rgba(255,255,255,0.1); padding-right: 20px; }
+        .data-item { margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+    <video class="input_video"></video>
+    <div id="loader"><div class="hud-text">SYSTEM BOOT</div><div class="bar"></div></div>
+    <div id="ui-layer">
+        <div>
+            <div class="hud-title">ARIX SIGNATURE</div>
+            <div class="hud-text">ETHERIAL PROJECT</div>
+            <div class="hud-status">
+                <div id="status-light" class="indicator red"></div>
+                <span id="status-text" class="hud-text">STANDBY</span>
+            </div>
+        </div>
+        <div class="data-lines">
+            <div class="hud-text data-item">STATUS: <span id="flow-val" style="color:#fff">NORMAL</span></div>
+            <div class="hud-text data-item">MORPH: <span id="morph-val" style="color:#fff">0.00</span></div>
+            <div class="hud-text data-item">POS: <span id="pos-val" style="color:#888">0.0, 0.0</span></div>
+            <div class="hud-text data-item" style="margin-top:10px; opacity:0.5; font-size:9px;">[SPACE] TO TOGGLE MODE</div>
+        </div>
+        <div id="controls">
+            <button id="btn-rain" class="btn active" onclick="setMode('rain')">RAIN</button>
+            <button id="btn-snow" class="btn" onclick="setMode('snow')">SNOW</button>
+        </div>
+    </div>
+    <div id="canvas-container"></div>
+
+    <script src="mediapipe/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="mediapipe/control_utils.js" crossorigin="anonymous"></script>
+    <script src="mediapipe/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="mediapipe/hands.js" crossorigin="anonymous"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- CONFIGURATION ---
+        const PARTICLE_COUNT = 32000; 
+        const TREE_HEIGHT = 16;
+        const TREE_RADIUS_BASE = 6;
+        
+        const state = {
+            mode: 'rain', 
+            handOpen: true, 
+            handDetected: false,
+            morphProgress: 0.0, 
+            handPos: { x: 0.5, y: 0.5 },
+            rainSpeed: 30.0, // Physical speed
+            rainOffset: 0.0  // Accumulated offset
+        };
+
+        // --- AUDIO ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function createRainBuffer() {
+            const bufferSize = audioCtx.sampleRate * 2; 
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            let lastOut = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                data[i] = (lastOut + (0.02 * white)) / 1.02; 
+                lastOut = data[i];
+                data[i] *= 3.5; 
+            }
+            return buffer;
+        }
+        const rainSource = audioCtx.createBufferSource();
+        rainSource.buffer = createRainBuffer();
+        rainSource.loop = true;
+        const rainGain = audioCtx.createGain();
+        rainGain.gain.value = 0;
+        rainSource.connect(rainGain);
+        rainGain.connect(audioCtx.destination);
+        rainSource.start();
+
+        const bellGain = audioCtx.createGain();
+        bellGain.connect(audioCtx.destination);
+        bellGain.gain.value = 0.4;
+        let nextNoteTime = 0;
+        let melodyIndex = 0;
+        const melody = [76, 83, 88, 95, 83, 91, 76, 88]; 
+
+        function playBell(midi, time) {
+            const freq = 440 * Math.pow(2, (midi - 69) / 12);
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, time);
+            gain.gain.setValueAtTime(0, time);
+            gain.gain.linearRampToValueAtTime(0.3, time + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.001, time + 2.5);
+            osc.connect(gain);
+            gain.connect(bellGain);
+            osc.start(time);
+            osc.stop(time + 3.0);
+        }
+
+        function scheduleMusic() {
+            if (state.mode === 'snow' && state.morphProgress > 0.6) {
+                if (audioCtx.currentTime >= nextNoteTime) {
+                    playBell(melody[melodyIndex], audioCtx.currentTime);
+                    nextNoteTime = audioCtx.currentTime + 0.25 + Math.random() * 0.1;
+                    melodyIndex = (melodyIndex + 1) % melody.length;
+                }
+            } else {
+                nextNoteTime = audioCtx.currentTime + 0.1;
+            }
+        }
+
+        // --- SCENE ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x010101, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 45; 
+        camera.position.y = 5;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.3; 
+        bloomPass.strength = 1.2;
+        bloomPass.radius = 0.5;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- PARTICLES ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = [];
+        const targetPositions = [];
+        const velocities = [];
+        const colors = [];
+        const sizes = [];
+
+        const colorPalette = [
+            new THREE.Color(0.9, 0.95, 1.0),
+            new THREE.Color(0.6, 0.7, 0.9),
+            new THREE.Color(0.8, 0.8, 0.95), 
+            new THREE.Color(1.0, 0.9, 0.7) 
+        ];
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            positions.push((Math.random() - 0.5) * 80);
+            positions.push(Math.random() * 60 - 20);
+            positions.push((Math.random() - 0.5) * 40);
+
+            velocities.push(0); 
+            velocities.push(0);
+            velocities.push(0);
+
+            // TREE
+            const t = i / PARTICLE_COUNT;
+            const h = Math.random() * TREE_HEIGHT;
+            const normH = h / TREE_HEIGHT; 
+            const treeY = h - (TREE_HEIGHT / 2);
+            let r = (1.0 - normH) * TREE_RADIUS_BASE;
+            const layers = Math.sin(h * 3.0) * 0.5 + 0.5; 
+            r *= (0.5 + 0.9 * layers); 
+            const angle = Math.random() * Math.PI * 2;
+            const scatter = Math.random() * 1.2;
+            
+            if (i > PARTICLE_COUNT - 100) {
+                targetPositions.push((Math.random()-0.5)*0.8, (TREE_HEIGHT/2) + 1.0 + Math.random()*1.0, (Math.random()-0.5)*0.8);
+                colors.push(3.0, 3.0, 3.5); 
+                sizes.push(3.0);
+            } else {
+                targetPositions.push(Math.cos(angle) * (r+scatter), treeY, Math.sin(angle) * (r+scatter));
+                const c = colorPalette[Math.floor(Math.random() * colorPalette.length)];
+                colors.push(c.r, c.g, c.b);
+                sizes.push(Math.random());
+            }
+        }
+
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('targetPos', new THREE.Float32BufferAttribute(targetPositions, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uMorph: { value: 0 },
+                uMode: { value: 0.0 },
+                uRainOffset: { value: 0.0 },
+                uRainSpeed: { value: 30.0 }
+            },
+            vertexShader: `
+                uniform float uTime;
+                uniform float uMorph;
+                uniform float uMode;
+                uniform float uRainOffset;
+                uniform float uRainSpeed;
+
+                attribute vec3 targetPos;
+                attribute vec3 color;
+                attribute float size;
+
+                varying vec3 vColor;
+                varying float vAlpha;
+
+                void main() {
+                    vColor = color;
+                    vec3 pos = position;
+
+                    if (uMode < 0.5) {
+                        // --- RAIN MODE ---
+                        pos.y = mod(position.y + uRainOffset, 60.0) - 20.0;
+                        
+                        if (uRainSpeed < 5.0) {
+                            pos.y += sin(uTime + pos.x) * 0.2; // Float
+                        } else {
+                            pos.x += pos.y * 0.05; // Slant
+                        }
+                    } else {
+                        // --- SNOW MODE ---
+                        float speed = 1.0; 
+                        float offset = uTime * 0.5;
+                        pos.y = mod(position.y - speed * uTime, 60.0) - 20.0;
+                        pos.x += sin(offset + position.y * 0.1) * 2.0;
+                        pos.z += cos(offset * 0.8 + position.x * 0.1) * 2.0;
+                    }
+
+                    // Morph
+                    float t = uMorph;
+                    t = t * t * (3.0 - 2.0 * t);
+                    vec3 finalPos = mix(pos, targetPos, t);
+
+                    vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+                    
+                    // --- SIZE ---
+                    float pointSize = 0.0;
+
+                    if (uMorph > 0.1) {
+                        // TREE
+                        pointSize = 1.5 + size * 1.5; 
+                    } else if (uMode < 0.5) {
+                        // RAIN
+                        if (uRainSpeed > 5.0) {
+                            pointSize = 20.0; // Streak
+                        } else {
+                            pointSize = 7.0 + size * 3.0; // Drops
+                        }
+                    } else {
+                        // SNOW
+                        pointSize = 5.0 + size * 3.0;
+                    }
+
+                    gl_PointSize = pointSize * (30.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                    
+                    vAlpha = 1.0;
+                    if (uMode < 0.5 && uRainSpeed > 5.0) vAlpha = 0.5; 
+                }
+            `,
+            fragmentShader: `
+                uniform float uMode;
+                uniform float uRainSpeed;
+                uniform float uMorph;
+
+                varying vec3 vColor;
+                varying float vAlpha;
+
+                void main() {
+                    vec2 coord = gl_PointCoord - vec2(0.5);
+                    vec3 finalColor = vColor;
+                    float alpha = vAlpha;
+
+                    if (uMorph > 0.1) {
+                        // TREE
+                        if (length(coord) > 0.5) discard;
+                        finalColor *= 1.5;
+                    } 
+                    else if (uMode < 0.5) {
+                        // RAIN
+                        if (uRainSpeed > 5.0) {
+                            // STREAK
+                            float slope = 0.15; 
+                            float dist = abs(coord.x - coord.y * slope);
+                            float line = 1.0 - smoothstep(0.0, 0.25, dist);
+                            float taper = 1.0 - smoothstep(0.2, 0.5, abs(coord.y));
+                            alpha *= line * taper;
+                            if (alpha < 0.05) discard;
+                            finalColor = vec3(0.65, 0.75, 0.85); 
+                            finalColor += vec3(0.2) * line; 
+                        } else {
+                            // DROPLET
+                            float dist = length(coord);
+                            if (dist > 0.5) discard;
+                            finalColor = vec3(0.4, 0.5, 0.65);
+                            float rim = smoothstep(0.5, 0.3, dist);
+                            finalColor *= rim;
+                            vec2 highlightPos = vec2(-0.15, 0.15);
+                            float highlight = 1.0 - smoothstep(0.0, 0.15, length(coord - highlightPos));
+                            finalColor += vec3(1.0) * highlight * 0.8;
+                            alpha = 0.9;
+                        }
+                    } 
+                    else {
+                        // SNOW
+                        float dist = length(coord);
+                        float soft = smoothstep(0.5, 0.0, dist);
+                        alpha = soft * 0.6;
+                        finalColor = vec3(0.95);
+                    }
+
+                    gl_FragColor = vec4(finalColor, alpha);
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- LOOP ---
+        const clock = new THREE.Clock();
+
+        function updateState() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            const dt = clock.getDelta();
+            const time = clock.getElapsedTime();
+            material.uniforms.uTime.value = time;
+
+            material.uniforms.uMode.value = state.mode === 'rain' ? 0.0 : 1.0;
+
+            // --- CAMERA ---
+            let targetCamX = 0;
+            let targetCamY = 5;
+
+            if (state.handDetected) {
+                if (!state.handOpen) {
+                    const xVal = (state.handPos.x - 0.5) * 40;
+                    const yVal = (state.handPos.y - 0.5) * 20;
+                    targetCamX = xVal;
+                    targetCamY = 5 - yVal;
+                }
+            } else {
+                targetCamX = Math.sin(time * 0.1) * 10;
+            }
+            
+            camera.position.x += (targetCamX - camera.position.x) * 0.05;
+            camera.position.y += (targetCamY - camera.position.y) * 0.05;
+            camera.lookAt(0, 0, 0);
+
+            // --- LOGIC ---
+            if (state.mode === 'rain') {
+                state.morphProgress = Math.max(0, state.morphProgress - 0.05);
+
+                let targetSpeed = 35.0;
+                if (state.handDetected && !state.handOpen) {
+                    targetSpeed = 0.0;
+                    document.getElementById('flow-val').innerText = "SUSPENDED";
+                } else {
+                    targetSpeed = 35.0;
+                    document.getElementById('flow-val').innerText = "FALLING";
+                }
+
+                state.rainSpeed += (targetSpeed - state.rainSpeed) * 0.1;
+                state.rainOffset -= state.rainSpeed * dt;
+
+                material.uniforms.uRainOffset.value = state.rainOffset;
+                material.uniforms.uRainSpeed.value = state.rainSpeed;
+
+                const targetVol = (state.rainSpeed < 5.0) ? 0.0 : 0.2 + (Math.min(state.rainSpeed, 60)/60)*0.3;
+                rainGain.gain.setTargetAtTime(targetVol, audioCtx.currentTime, 0.1);
+
+            } else {
+                rainGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+                document.getElementById('flow-val').innerText = "SNOW";
+
+                if (state.handDetected && !state.handOpen) {
+                    state.morphProgress = Math.min(1.0, state.morphProgress + 0.015);
+                } else {
+                    state.morphProgress = Math.max(0.0, state.morphProgress - 0.02);
+                }
+            }
+            material.uniforms.uMorph.value = state.morphProgress;
+            
+            document.getElementById('morph-val').innerText = state.morphProgress.toFixed(2);
+            document.getElementById('pos-val').innerText = `${state.handPos.x.toFixed(1)}, ${state.handPos.y.toFixed(1)}`;
+            
+            scheduleMusic();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateState();
+            composer.render();
+        }
+        animate();
+
+        // --- HANDS ---
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        function onResults(results) {
+            document.getElementById('loader').style.display = 'none';
+            const ind = document.getElementById('status-light');
+            ind.classList.remove('red'); ind.classList.add('active');
+            document.getElementById('status-text').innerText = "ONLINE";
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                state.handDetected = true;
+                const lm = results.multiHandLandmarks[0];
+                const wrist = lm[0];
+                state.handPos = { x: 1.0 - wrist.x, y: wrist.y };
+                let tipsDist = 0;
+                [8, 12, 16, 20].forEach(i => {
+                    const d = Math.sqrt(Math.pow(lm[i].x - wrist.x, 2) + Math.pow(lm[i].y - wrist.y, 2));
+                    tipsDist += d;
+                });
+                state.handOpen = tipsDist > 0.65;
+            } else {
+                state.handDetected = false;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `mediapipe/${file}`});
+        hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => await hands.send({image: videoElement}),
+            width: 640, height: 480
+        });
+        cameraUtils.start();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- MODE TOGGLE & SHORTCUT ---
+        window.setMode = (m) => {
+            state.mode = m;
+            // Update UI class
+            document.querySelectorAll('.btn').forEach(b => {
+                b.classList.remove('active');
+                if(b.id === `btn-${m}`) b.classList.add('active');
+            });
+        };
+
+        // Spacebar Shortcut
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                const newMode = state.mode === 'rain' ? 'snow' : 'rain';
+                window.setMode(newMode);
+            }
+        });
+    </script>
+</body>
+</html>
