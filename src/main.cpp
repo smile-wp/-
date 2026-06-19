@@ -13,6 +13,8 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1        // 没有复位引脚
 #define SCREEN_ADDRESS 0x3C  // I2C地址（大部分0.96寸OLED是0x3C，少数是0x3D）
+#define I2C_SDA_PIN 4        // OLED SDA 引脚（备用）
+#define I2C_SCL_PIN 5        // OLED SCL 引脚（备用）
 
 // 创建OLED显示对象
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -28,6 +30,9 @@ void setup()
   Serial.begin(115200);
   Serial.println("CatDance OLED Display Starting...");
 
+  // 显式初始化 I2C 引脚，ESP32-S3 默认 I2C 引脚可能不同
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+
   // 初始化GPIO
   pinMode(LED_PIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
@@ -38,8 +43,8 @@ void setup()
   {
     Serial.println(F("SSD1306初始化失败！"));
     Serial.println(F("请检查OLED连接："));
-    Serial.println(F("  SDA -> GPIO 21 (或默认I2C SDA引脚)"));
-    Serial.println(F("  SCL -> GPIO 22 (或默认I2C SCL引脚)"));
+    Serial.println(F("  SDA -> GPIO 4"));
+    Serial.println(F("  SCL -> GPIO 5"));
     Serial.println(F("  VCC -> 3.3V"));
     Serial.println(F("  GND -> GND"));
     while (1)
