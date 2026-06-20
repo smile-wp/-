@@ -1,0 +1,80 @@
+#include "asr.h"
+#include "setup.h"
+#include "myLib/asr_event.h"
+#include "SoftwareSerial.h"
+
+uint32_t snid;
+int8_t zhen = 2;
+SoftwareSerial mySerial1(0,1);
+void pins_attached();
+
+//{ID:250,keyword:"命令词",ASR:"最大音量",ASRTO:"音量调整到最大"}
+//{ID:251,keyword:"命令词",ASR:"中等音量",ASRTO:"音量调整到中等"}
+//{ID:252,keyword:"命令词",ASR:"最小音量",ASRTO:"音量调整到最小"}
+void pins_attached(){
+  while (1) {
+    if(mySerial1.available() > 0){
+      if(mySerial1.available() > 0){
+        zhen = mySerial1.read();
+        //{ID:500,keyword:"命令词",ASR:"耍接官",ASRTO:""}
+        play_audio(500);
+        mySerial1.flush();
+      }
+    }
+    delay(1);
+  }
+  vTaskDelete(NULL);
+}
+
+void ASR_CODE()
+{
+  // 唤醒词/命令词统一播放对应ID的音频（如果存在），否则播放应答音
+  switch(snid) {
+    case 501: // 打开
+      mySerial1.println(1);
+      play_audio(501);    // 开启.mp3
+      break;
+    case 502: // 宝箱
+      mySerial1.println(1);
+      play_audio(500);    // 应答.mp3（通用）
+      break;
+    case 503: // 十秒关闭
+      mySerial1.println(2);
+      play_audio(500);
+      break;
+    case 504: // 二十秒关闭
+      mySerial1.println(3);
+      play_audio(500);
+      break;
+    case 505: // 三十秒关闭
+      mySerial1.println(4);
+      play_audio(500);
+      break;
+    case 506: // 鲨鱼模式
+      mySerial1.println(6);
+      play_audio(500);
+      break;
+    case 507: // 跌倒
+      mySerial1.println(7);
+      play_audio(500);
+      break;
+    case 508: // 关闭
+      mySerial1.println(8);
+      play_audio(500);
+      break;
+    default:
+      break;
+  }
+}
+
+void setup()
+{
+  mySerial1.begin(9600);
+  //{speak:小蝶-清新女声,vol:10,speed:10,platform:haohaodada}
+  //{playid:10001,voice:}
+  set_wakeup_forever();
+  xTaskCreate(pins_attached,"pins_attached",256,NULL,4,NULL);
+}
+
+
+/** edittype="twen_asrcode" */
